@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -30,7 +30,7 @@ class ResearchAPIClient:
     Examples:
         >>> client = ResearchAPIClient("my-api-key", "my-api-secret")
         >>> videos = client.query_videos(["7123456789", "7987654321"])
-        >>> user_content = client.query_user_content(["username1", "username2"])
+        >>> user_videos = client.query_user_videos(["username1", "username2"])
 
     Raises:
         AttributeError: If API credentials are not configured in settings
@@ -48,7 +48,18 @@ class ResearchAPIClient:
 
         self.access_token = None
         self.token_expires_at = None
+        self._http_client = httpx.Client(timeout=config.DEFAULT_POST_TIMEOUT)
         self._refresh_access_token()
+
+    def close(self) -> None:
+        """Close the underlying HTTP connection pool."""
+        self._http_client.close()
+
+    def __enter__(self) -> "ResearchAPIClient":
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        self.close()
 
     def _refresh_access_token(self) -> None:
         """Retrieves and stores a new access token from TikTok.
@@ -66,11 +77,10 @@ class ResearchAPIClient:
             "grant_type": "client_credentials",
         }
 
-        response = httpx.post(
+        response = self._http_client.post(
             self.ACCESS_TOKEN_URL,
             headers=headers,
             data=payload,
-            timeout=config.DEFAULT_POST_TIMEOUT,
         )
 
         if response.status_code != httpx.codes.OK:
@@ -90,7 +100,7 @@ class ResearchAPIClient:
 
         self.access_token = data["access_token"]
         expires_in = data.get("expires_in", config.DEFAULT_REFRESH_TOKEN_EXP_TIME)
-        self.token_expires_at = datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
+        self.token_expires_at = datetime.now(tz=UTC) + timedelta(seconds=expires_in)
 
         logger.info("Access token refreshed, expires at %s", self.token_expires_at)
 
@@ -100,10 +110,9 @@ class ResearchAPIClient:
         Checks if the token will expire within the next 5 minutes and
         refreshes it proactively to avoid request failures.
         """
-        if (
-            self.token_expires_at is None
-            or self.token_expires_at <= datetime.now(tz=timezone.utc) + timedelta(minutes=5)
-        ):
+        if self.token_expires_at is None or self.token_expires_at <= datetime.now(
+            tz=UTC
+        ) + timedelta(minutes=5):
             logger.info("Access token expired or expiring soon, refreshing...")
             self._refresh_access_token()
 
@@ -185,11 +194,10 @@ class ResearchAPIClient:
         """
         url = self._build_url()
         query_body = self._build_query_body(query, **kwargs)
-        response = httpx.post(
+        response = self._http_client.post(
             url,
             headers=self._get_auth_header(),
             data=query_body,
-            timeout=config.DEFAULT_POST_TIMEOUT,
         )
 
         if response.status_code != httpx.codes.OK:
@@ -253,7 +261,7 @@ class ResearchAPIClient:
             The start_date cannot be more than 30 days before end_date per API limits.
         """
         if end_date is None:
-            end_date = datetime.now(tz=timezone.utc).date() - timedelta(days=3)
+            end_date = datetime.now(tz=UTC).date() - timedelta(days=3)
         else:
             end_date = end_date.date()
 
