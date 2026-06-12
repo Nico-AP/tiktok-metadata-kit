@@ -2,6 +2,7 @@ import json
 import logging
 import random
 import time
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -32,28 +33,66 @@ def _parse_retry_after(value: str) -> float | None:
 class ResearchAPIClient:
     """Client for interacting with TikTok's Research API.
 
-    This client handles authentication, request formatting, and querying
-    TikTok's Research API. It automatically manages access token lifecycle,
-    including proactive refresh to prevent expiration during long-running operations.
+    Handles authentication, request formatting, and querying. Access tokens
+    are obtained on construction and refreshed proactively before expiry, so
+    callers do not need to manage token lifecycle.
 
-    The client supports querying videos by ID and retrieving user-posted content
-    with automatic pagination handling. All requests include comprehensive error
-    handling and logging for debugging and monitoring.
+    Transient failures (network errors, HTTP 429, 5xx) are retried with
+    exponential backoff and jitter; the server's ``Retry-After`` header is
+    honored up to :attr:`MAX_RETRY_AFTER`. Connections are pooled via a
+    persistent ``httpx.Client``; use the client as a context manager (or
+    call :meth:`close`) to release them.
+
+    Two access patterns are exposed for video queries:
+
+    * Single-page primitives — :meth:`query_videos`,
+      :meth:`query_user_videos` — return one raw API response. Use these
+      when you want fine-grained control or just one page (e.g. debugging,
+      interactive use).
+    * Generators — :meth:`iter_video_pages` / :meth:`iter_user_video_pages`
+      yield each raw page following the API cursor; :meth:`iter_videos` /
+      :meth:`iter_user_videos` yield individual video dicts across all
+      pages. Use these for bulk retrieval — paging, token refresh, and
+      retries all happen transparently.
 
     Attributes:
-        ACCESS_TOKEN_URL (str): Endpoint for OAuth token retrieval
-        VIDEO_QUERY_URL (str): Endpoint for video metadata queries
-        USER_QUERY_URL (str): Endpoint for user information queries
+        ACCESS_TOKEN_URL (str): OAuth token endpoint.
+        VIDEO_QUERY_URL (str): Video metadata query endpoint.
+        USER_QUERY_URL (str): User info query endpoint.
+        MAX_RETRIES (int): Max retries per request on transient errors.
+        BACKOFF_CAP (float): Per-sleep ceiling for computed backoff.
+        MAX_RETRY_AFTER (float): Ceiling for server-supplied ``Retry-After``.
 
     Examples:
-        >>> client = ResearchAPIClient("my-api-key", "my-api-secret")
-        >>> videos = client.query_videos(["7123456789", "7987654321"])
-        >>> user_videos = client.query_user_videos(["username1", "username2"])
+        Single page::
+
+            client = ResearchAPIClient("key", "secret")
+            page = client.query_videos(["7123456789", "7987654321"])
+
+        Stream all videos for a set of users::
+
+            with ResearchAPIClient("key", "secret") as client:
+                for video in client.iter_user_videos(["alice", "bob"]):
+                    process(video)
+
+        Page-level iteration with a safety cap::
+
+            for page in client.iter_video_pages(ids, max_pages=10):
+                process_page(page)
+
+        Resume from a checkpoint::
+
+            for page in client.iter_video_pages(
+                ids,
+                cursor=saved_cursor,
+                search_id=saved_search_id,
+            ):
+                ...
 
     Raises:
-        AttributeError: If API credentials are not configured in settings
-        ResearchAPIAccessTokenRetrievalFailed: If token retrieval fails
-        ResearchAPIRequestError: If API requests fail
+        ResearchAPIAccessTokenRetrievalError: If token retrieval fails.
+        ResearchAPIRequestError: If a query request fails or the API
+            returns an error response.
     """
 
     ACCESS_TOKEN_URL = config.ACCESS_TOKEN_URL
@@ -211,46 +250,9 @@ class ResearchAPIClient:
         self._ensure_valid_token()
         return self.access_token
 
-    def query_user_videos(self, user_ids: list[str], **kwargs) -> dict[str, Any]:
-        """Retrieve videos posted by specific TikTok users via Research API.
-
-        Args:
-            user_ids: List of TikTok usernames to query.
-            **kwargs: Additional parameters passed to make_query() including:
-                start_date, end_date, max_count, cursor, search_id, is_random.
-
-        Returns:
-            API response containing retrieved video data and pagination info.
-
-        Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
-        """
-        query = {
-            "and": [
-                {
-                    "operation": "IN",
-                    "field_name": "username",
-                    "field_values": user_ids,
-                },
-            ],
-        }
-        return self._make_query(query, **kwargs)
-
-    def query_videos(self, video_ids: list[str], **kwargs) -> dict[str, Any]:
-        """Retrieve metadata for specific TikTok videos via Research API.
-
-        Args:
-            video_ids: List of TikTok video IDs to query.
-            **kwargs: Additional parameters passed to make_query() including:
-                start_date, end_date, max_count, cursor, search_id, is_random.
-
-        Returns:
-            API response containing video data and pagination info.
-
-        Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
-        """
-        query = {
+    @staticmethod
+    def _video_id_query(video_ids: list[str]) -> dict[str, Any]:
+        return {
             "and": [
                 {
                     "operation": "IN",
@@ -259,7 +261,154 @@ class ResearchAPIClient:
                 },
             ],
         }
-        return self._make_query(query, **kwargs)
+
+    @staticmethod
+    def _username_query(user_ids: list[str]) -> dict[str, Any]:
+        return {
+            "and": [
+                {"operation": "IN", "field_name": "username", "field_values": user_ids},
+            ],
+        }
+
+    def query_videos(self, video_ids: list[str], **kwargs) -> dict[str, Any]:
+        """Retrieve a single page of video metadata via Research API.
+
+        For automatic pagination across all results, use :meth:`iter_videos`
+        or :meth:`iter_video_pages`.
+
+        Args:
+            video_ids: List of TikTok video IDs to query.
+            **kwargs: Additional parameters passed to ``_build_query_body``
+                (start_date, end_date, max_count, cursor, search_id, is_random).
+
+        Raises:
+            ResearchAPIRequestError: If the API request fails or returns an error.
+        """
+        return self._make_query(self._video_id_query(video_ids), **kwargs)
+
+    def query_user_videos(self, user_ids: list[str], **kwargs) -> dict[str, Any]:
+        """Retrieve a single page of videos posted by given users via Research API.
+
+        For automatic pagination across all results, use :meth:`iter_user_videos`
+        or :meth:`iter_user_video_pages`.
+
+        Args:
+            user_ids: List of TikTok usernames to query.
+            **kwargs: Additional parameters passed to ``_build_query_body``
+                (start_date, end_date, max_count, cursor, search_id, is_random).
+
+        Raises:
+            ResearchAPIRequestError: If the API request fails or returns an error.
+        """
+        return self._make_query(self._username_query(user_ids), **kwargs)
+
+    def iter_video_pages(
+        self,
+        video_ids: list[str],
+        *,
+        max_pages: int | None = None,
+        cursor: str | None = None,
+        search_id: str | None = None,
+        **kwargs,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield each page of video metadata, following the API cursor.
+
+        Args:
+            video_ids: List of TikTok video IDs to query.
+            max_pages: Safety cap on pages fetched. ``None`` means no cap.
+            cursor: Resume from a prior page's cursor.
+            search_id: Resume from a prior page's search_id.
+            **kwargs: Forwarded to ``_build_query_body``
+                (start_date, end_date, max_count, is_random).
+
+        Yields:
+            Raw API response for each page (includes ``data.videos``,
+            ``data.cursor``, ``data.search_id``, ``data.has_more``).
+        """
+        yield from self._iter_pages(
+            self._video_id_query(video_ids),
+            max_pages=max_pages,
+            cursor=cursor,
+            search_id=search_id,
+            **kwargs,
+        )
+
+    def iter_user_video_pages(
+        self,
+        user_ids: list[str],
+        *,
+        max_pages: int | None = None,
+        cursor: str | None = None,
+        search_id: str | None = None,
+        **kwargs,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield each page of videos posted by given users, following the API cursor."""
+        yield from self._iter_pages(
+            self._username_query(user_ids),
+            max_pages=max_pages,
+            cursor=cursor,
+            search_id=search_id,
+            **kwargs,
+        )
+
+    def iter_videos(
+        self,
+        video_ids: list[str],
+        **kwargs,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield each video dict across all pages.
+
+        Thin wrapper over ``iter_video_pages``.
+        """
+        for page in self.iter_video_pages(video_ids, **kwargs):
+            yield from page.get("data", {}).get("videos", [])
+
+    def iter_user_videos(
+        self,
+        user_ids: list[str],
+        **kwargs,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield each video dict for the given users across all pages."""
+        for page in self.iter_user_video_pages(user_ids, **kwargs):
+            yield from page.get("data", {}).get("videos", [])
+
+    def _iter_pages(
+        self,
+        query: dict[str, Any],
+        *,
+        max_pages: int | None,
+        cursor: str | None,
+        search_id: str | None,
+        **kwargs,
+    ) -> Iterator[dict[str, Any]]:
+        """Drive cursor-based pagination for a given query body."""
+        pages_yielded = 0
+        while True:
+            page = self._make_query(
+                query,
+                cursor=cursor,
+                search_id=search_id,
+                **kwargs,
+            )
+            yield page
+            pages_yielded += 1
+
+            if max_pages is not None and pages_yielded >= max_pages:
+                return
+
+            data = page.get("data") or {}
+            if not data.get("has_more"):
+                return
+
+            next_cursor = data.get("cursor")
+            if next_cursor is None:
+                logger.warning(
+                    "Pagination stopped: response reported has_more=True "
+                    "but did not include a cursor",
+                )
+                return
+            cursor = next_cursor
+            search_id = data.get("search_id", search_id)
 
     def _make_query(self, query: dict[str, Any], **kwargs) -> dict[str, Any]:
         """Execute a query against the TikTok Research API.
