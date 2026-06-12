@@ -1,6 +1,9 @@
 import json
 import logging
+import random
+import time
 from datetime import UTC, date, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -9,6 +12,21 @@ from . import config
 from .exceptions import ResearchAPIAccessTokenRetrievalError, ResearchAPIRequestError
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_retry_after(value: str) -> float | None:
+    """Parse a Retry-After header value (seconds or HTTP-date) into seconds."""
+    try:
+        return float(value)
+    except ValueError:
+        pass
+    try:
+        target = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=UTC)
+    return (target - datetime.now(tz=UTC)).total_seconds()
 
 
 class ResearchAPIClient:
@@ -42,6 +60,11 @@ class ResearchAPIClient:
     VIDEO_QUERY_URL = config.VIDEO_QUERY_URL
     USER_QUERY_URL = config.USER_QUERY_URL
 
+    # Retry/backoff configuration
+    MAX_RETRIES = config.DEFAULT_MAX_RETRIES
+    BACKOFF_CAP = config.DEFAULT_BACKOFF_CAP
+    MAX_RETRY_AFTER = config.MAX_RETRY_AFTER
+
     def __init__(self, api_key: str, api_secret: str) -> None:
         self.key = api_key
         self.secret = api_secret
@@ -61,6 +84,60 @@ class ResearchAPIClient:
     def __exit__(self, *exc_info: object) -> None:
         self.close()
 
+    def _post_with_retry(self, url: str, **kwargs) -> httpx.Response:
+        """POST with exponential backoff on transient errors.
+
+        Retries on transport errors and on retryable status codes (429, 5xx).
+        Honors ``Retry-After`` (seconds or HTTP-date) when present.
+        """
+        last_exc: Exception | None = None
+        for attempt in range(self.MAX_RETRIES + 1):
+            try:
+                response = self._http_client.post(url, **kwargs)
+            except httpx.TransportError as exc:
+                last_exc = exc
+                response = None
+            else:
+                if response.status_code not in config.RETRYABLE_STATUS_CODES:
+                    return response
+
+            if attempt == self.MAX_RETRIES:
+                break
+
+            delay = self._compute_backoff(attempt, response)
+            logger.warning(
+                "POST %s failed (attempt %d/%d); retrying in %.2fs",
+                url,
+                attempt + 1,
+                self.MAX_RETRIES + 1,
+                delay,
+            )
+            time.sleep(delay)
+
+        if response is not None:
+            return response
+        assert last_exc is not None
+        raise last_exc
+
+    def _compute_backoff(self, attempt: int, response: httpx.Response | None) -> float:
+        """Return seconds to sleep before the next retry."""
+        if response is not None:
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                requested = _parse_retry_after(retry_after)
+                if requested is not None:
+                    if requested > self.MAX_RETRY_AFTER:
+                        logger.warning(
+                            "Server requested Retry-After=%.1fs; clamping to %.1fs",
+                            requested,
+                            self.MAX_RETRY_AFTER,
+                        )
+                    return max(0.0, min(requested, self.MAX_RETRY_AFTER))
+
+        backoff = config.DEFAULT_BACKOFF_BASE * (2**attempt)
+        jitter = random.uniform(0, config.DEFAULT_BACKOFF_BASE)  # noqa: S311
+        return min(backoff + jitter, self.BACKOFF_CAP)
+
     def _refresh_access_token(self) -> None:
         """Retrieves and stores a new access token from TikTok.
 
@@ -77,7 +154,7 @@ class ResearchAPIClient:
             "grant_type": "client_credentials",
         }
 
-        response = self._http_client.post(
+        response = self._post_with_retry(
             self.ACCESS_TOKEN_URL,
             headers=headers,
             data=payload,
@@ -91,7 +168,16 @@ class ResearchAPIClient:
             logger.error(e)
             raise ResearchAPIAccessTokenRetrievalError(e)
 
-        data = response.json()
+        try:
+            data = response.json()
+        except json.JSONDecodeError as exc:
+            e = (
+                "Malformed JSON in Research API access-token response "
+                f"(content-type: {response.headers.get('Content-Type')!r}, "
+                f"body[:200]: {response.text[:200]!r})"
+            )
+            logger.error(e)  # noqa: TRY400
+            raise ResearchAPIAccessTokenRetrievalError(e) from exc
 
         if "error" in data:
             e = f"{data['error']}: {data.get('error_description')}"
@@ -194,10 +280,10 @@ class ResearchAPIClient:
         """
         url = self._build_url()
         query_body = self._build_query_body(query, **kwargs)
-        response = self._http_client.post(
+        response = self._post_with_retry(
             url,
             headers=self._get_auth_header(),
-            data=query_body,
+            json=query_body,
         )
 
         if response.status_code != httpx.codes.OK:
@@ -208,7 +294,16 @@ class ResearchAPIClient:
             )
             raise ResearchAPIRequestError(msg)
 
-        data = response.json()
+        try:
+            data = response.json()
+        except json.JSONDecodeError as exc:
+            msg = (
+                "Malformed JSON in Research API response "
+                f"(content-type: {response.headers.get('Content-Type')!r}, "
+                f"body[:200]: {response.text[:200]!r})"
+            )
+            raise ResearchAPIRequestError(msg) from exc
+
         if "error" in data and data["error"].get("code") != "ok":
             msg = (
                 f"Error in Research API response: "
