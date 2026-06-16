@@ -185,7 +185,7 @@ class TestIterVideos:
 
 
 class TestIterUserVideos:
-    def test_uses_username_filter(
+    def test_user_video_pages_uses_username_filter(
         self,
         mock_handler: MockHandler,
         client: ResearchAPIClient,
@@ -196,3 +196,31 @@ class TestIterUserVideos:
         body = json.loads(mock_handler.requests[1].content)
         assert body["query"]["and"][0]["field_name"] == "username"
         assert body["query"]["and"][0]["field_values"] == ["alice"]
+
+    def test_iter_user_videos_flattens_pages_to_video_dicts(
+        self,
+        mock_handler: MockHandler,
+        client: ResearchAPIClient,
+    ) -> None:
+        mock_handler.add_response(
+            _page(
+                [{"id": "1", "username": "alice"}, {"id": "2", "username": "alice"}],
+                cursor="c2",
+                has_more=True,
+            )
+        )
+        mock_handler.add_response(
+            _page([{"id": "3", "username": "bob"}], has_more=False),
+        )
+
+        videos = list(client.iter_user_videos(["alice", "bob"]))
+
+        assert videos == [
+            {"id": "1", "username": "alice"},
+            {"id": "2", "username": "alice"},
+            {"id": "3", "username": "bob"},
+        ]
+        # Verify the username filter was sent on every page request.
+        for req in mock_handler.requests[1:]:
+            body = json.loads(req.content)
+            assert body["query"]["and"][0]["field_name"] == "username"
