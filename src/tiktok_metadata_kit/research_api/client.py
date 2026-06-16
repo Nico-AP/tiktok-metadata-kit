@@ -5,7 +5,7 @@ import time
 from collections.abc import Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any, TypedDict, Unpack
+from typing import Any, Self, TypedDict, Unpack
 
 import httpx
 
@@ -176,7 +176,7 @@ class ResearchAPIClient:
         """Close the underlying HTTP connection pool."""
         self._http_client.close()
 
-    def __enter__(self) -> "ResearchAPIClient":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
