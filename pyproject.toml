@@ -108,6 +108,16 @@ force-single-line = false
 [tool.ruff.lint.per-file-ignores]
 "test*.py" = ["SLF001", "PLR2004", "FBT003", "PT009", "S106", "PT027", "S105"]
 
+# ==== pytest ====
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "integration: hits a real TikTok API endpoint (requires credentials in env vars)",
+]
+# Skip integration tests by default; run them explicitly with `pytest -m integration`.
+addopts = "-m 'not integration'"
+
 # ==== Coverage ====
 [tool.coverage.run]
 include = ["src/**"]

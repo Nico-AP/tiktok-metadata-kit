@@ -139,6 +139,8 @@ class ResearchAPIClient:
         api_key: str,
         api_secret: str,
         video_fields: Sequence[str] | None = None,
+        *,
+        transport: httpx.BaseTransport | None = None,
     ) -> None:
         """Construct a client.
 
@@ -149,6 +151,10 @@ class ResearchAPIClient:
                 endpoint. ``None`` uses :data:`config.DEFAULT_VIDEO_FIELDS`.
                 Per-call overrides are accepted via the ``fields=`` kwarg on
                 ``query_*`` and ``iter_*`` methods.
+            transport: Custom ``httpx`` transport. ``None`` uses the default
+                network transport. Primarily intended for tests, which can
+                inject :class:`httpx.MockTransport` to drive the client
+                without network access.
         """
         self.key = api_key
         self.secret = api_secret
@@ -160,7 +166,10 @@ class ResearchAPIClient:
 
         self.access_token = None
         self.token_expires_at = None
-        self._http_client = httpx.Client(timeout=config.DEFAULT_POST_TIMEOUT)
+        self._http_client = httpx.Client(
+            timeout=config.DEFAULT_POST_TIMEOUT,
+            transport=transport,
+        )
         self._refresh_access_token()
 
     def close(self) -> None:

@@ -2,4 +2,5 @@ coverage==7.14.1  # https://github.com/nedbat/coveragepy
 mypy==2.1.0  # https://github.com/python/mypy
 pip-audit==2.10.1  # https://pypi.org/project/pip-audit/
 pre-commit==4.6.0  # https://github.com/pre-commit/pre-commit
+pytest==9.1.0  # https://github.com/pytest-dev/pytest
 ruff==0.15.17  # https://github.com/astral-sh/ruff
