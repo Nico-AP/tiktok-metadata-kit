@@ -1,0 +1,65 @@
+name: Release to TestPyPI
+
+# Triggered by any `v*` tag push (including prereleases like v1.0.0rc1).
+# Publishes a sdist + wheel to TestPyPI for smoke-testing before the real
+# release. Promotion to production PyPI is gated by creating a GitHub
+# Release — see publish-pypi.yml.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/*.txt
+
+      - name: Verify tag matches pyproject version
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+          PROJECT_VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          if [ "$TAG_VERSION" != "$PROJECT_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match pyproject.toml version $PROJECT_VERSION"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements/base.txt -r requirements/dev.txt
+          pip install -e .
+
+      - name: Run tests
+        run: pytest
+
+  build-and-publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/tiktok-metadata-kit
+    permissions:
+      id-token: write  # trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
