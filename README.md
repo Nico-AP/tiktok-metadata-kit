@@ -220,10 +220,10 @@ favor `max_count=1` style probes for shape assertions.
 
 ### Branching
 
-| Branch  | Purpose                                                              |
-|---------|----------------------------------------------------------------------|
+| Branch  | Purpose                                                                                                           |
+|---------|-------------------------------------------------------------------------------------------------------------------|
 | `main`  | Stable. Only ever advances when cutting a release. Each commit on `main` corresponds to a tagged version on PyPI. |
-| `dev`   | Integration branch. Day-to-day work lands here via feature-branch PRs. |
+| `dev`   | Integration branch. Day-to-day work lands here via feature-branch PRs.                                            |
 
 Feature branches → PR → merge to `dev`. When ready to release: PR `dev` → `main`,
 tag, release.
@@ -232,11 +232,11 @@ tag, release.
 
 Three GitHub Actions workflows live in `.github/workflows/`:
 
-| Workflow                      | Trigger                              | What it does                                                         |
-|-------------------------------|--------------------------------------|----------------------------------------------------------------------|
-| `test.yml`                    | push to `main`/`dev`; all PRs        | Runs `ruff check` and `pytest` with coverage (80% gate).             |
+| Workflow                      | Trigger                              | What it does                                                                                                |
+|-------------------------------|--------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| `test.yml`                    | push to `main`/`dev`; all PRs        | Runs `ruff check` and `pytest` with coverage (80% gate).                                                    |
 | `release-testpypi.yml`        | push of a tag matching `v*`          | Runs tests, builds sdist + wheel (version derived from the tag via `hatch-vcs`), publishes to **TestPyPI**. |
-| `publish-pypi.yml`            | a GitHub Release is published        | Same checks and build, publishes to **production PyPI**.             |
+| `publish-pypi.yml`            | a GitHub Release is published        | Same checks and build, publishes to **production PyPI**.                                                    |
 
 Both release workflows use **trusted publishing** (OIDC) — no PyPI API tokens
 are stored as GitHub Secrets.
