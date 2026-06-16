@@ -2,10 +2,10 @@ import json
 import logging
 import random
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from datetime import UTC, date, datetime, timedelta
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, TypedDict, Unpack
 
 import httpx
 
@@ -13,6 +13,32 @@ from . import config
 from .exceptions import ResearchAPIAccessTokenRetrievalError, ResearchAPIRequestError
 
 logger = logging.getLogger(__name__)
+
+
+class QueryOptions(TypedDict, total=False):
+    """Filter options accepted by all video-query methods.
+
+    All keys are optional; omitted values fall back to the defaults in
+    :meth:`ResearchAPIClient._build_query_body`.
+    """
+
+    # DEV NOTE: Keys here must match the keyword parameters of
+    #   `ResearchAPIClient._build_query_body` — see its docstring for the contract.
+
+    start_date: datetime | None
+    end_date: datetime | None
+    max_count: int | None
+    is_random: bool
+
+
+class PageOptions(QueryOptions, total=False):
+    """:class:`QueryOptions` plus pagination cursors for single-page calls."""
+
+    # DEV NOTE: Keys here must match the keyword parameters of
+    #   `ResearchAPIClient._build_query_body` — see its docstring for the contract.
+
+    cursor: str | None
+    search_id: str | None
 
 
 def _parse_retry_after(value: str) -> float | None:
@@ -64,10 +90,13 @@ class ResearchAPIClient:
         MAX_RETRY_AFTER (float): Ceiling for server-supplied ``Retry-After``.
 
     Examples:
-        Single page::
+        Single page with filter options::
 
             client = ResearchAPIClient("key", "secret")
-            page = client.query_videos(["7123456789", "7987654321"])
+            page = client.query_videos(
+                ["7123456789", "7987654321"],
+                PageOptions(max_count=50),
+            )
 
         Stream all videos for a set of users::
 
@@ -80,10 +109,11 @@ class ResearchAPIClient:
             for page in client.iter_video_pages(ids, max_pages=10):
                 process_page(page)
 
-        Resume from a checkpoint::
+        Resume from a checkpoint, reusing the same filters::
 
+            filters = QueryOptions(start_date=d0, end_date=d1)
             for page in client.iter_video_pages(
-                ids,
+                ids, filters,
                 cursor=saved_cursor,
                 search_id=saved_search_id,
             ):
@@ -104,9 +134,29 @@ class ResearchAPIClient:
     BACKOFF_CAP = config.DEFAULT_BACKOFF_CAP
     MAX_RETRY_AFTER = config.MAX_RETRY_AFTER
 
-    def __init__(self, api_key: str, api_secret: str) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        video_fields: Sequence[str] | None = None,
+    ) -> None:
+        """Construct a client.
+
+        Args:
+            api_key: TikTok Research API client key.
+            api_secret: TikTok Research API client secret.
+            video_fields: Default fields to request from the video-query
+                endpoint. ``None`` uses :data:`config.DEFAULT_VIDEO_FIELDS`.
+                Per-call overrides are accepted via the ``fields=`` kwarg on
+                ``query_*`` and ``iter_*`` methods.
+        """
         self.key = api_key
         self.secret = api_secret
+        self._video_fields: tuple[str, ...] = (
+            tuple(video_fields)
+            if video_fields is not None
+            else config.DEFAULT_VIDEO_FIELDS
+        )
 
         self.access_token = None
         self.token_expires_at = None
@@ -270,7 +320,13 @@ class ResearchAPIClient:
             ],
         }
 
-    def query_videos(self, video_ids: list[str], **kwargs) -> dict[str, Any]:
+    def query_videos(
+        self,
+        video_ids: list[str],
+        query_params: PageOptions | None = None,
+        *,
+        fields: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         """Retrieve a single page of video metadata via Research API.
 
         For automatic pagination across all results, use :meth:`iter_videos`
@@ -278,15 +334,26 @@ class ResearchAPIClient:
 
         Args:
             video_ids: List of TikTok video IDs to query.
-            **kwargs: Additional parameters passed to ``_build_query_body``
-                (start_date, end_date, max_count, cursor, search_id, is_random).
+            query_params: Filter and pagination parameters. See :class:`PageOptions`.
+            fields: Per-call override for response fields. ``None`` uses the
+                client default (set via ``video_fields=`` in :meth:`__init__`).
 
         Raises:
             ResearchAPIRequestError: If the API request fails or returns an error.
         """
-        return self._make_query(self._video_id_query(video_ids), **kwargs)
+        return self._make_query(
+            self._video_id_query(video_ids),
+            fields=fields,
+            **(query_params or {}),
+        )
 
-    def query_user_videos(self, user_ids: list[str], **kwargs) -> dict[str, Any]:
+    def query_user_videos(
+        self,
+        user_ids: list[str],
+        query_params: PageOptions | None = None,
+        *,
+        fields: Sequence[str] | None = None,
+    ) -> dict[str, Any]:
         """Retrieve a single page of videos posted by given users via Research API.
 
         For automatic pagination across all results, use :meth:`iter_user_videos`
@@ -294,32 +361,39 @@ class ResearchAPIClient:
 
         Args:
             user_ids: List of TikTok usernames to query.
-            **kwargs: Additional parameters passed to ``_build_query_body``
-                (start_date, end_date, max_count, cursor, search_id, is_random).
+            query_params: Filter and pagination parameters. See :class:`PageOptions`.
+            fields: Per-call override for response fields. ``None`` uses the
+                client default (set via ``video_fields=`` in :meth:`__init__`).
 
         Raises:
             ResearchAPIRequestError: If the API request fails or returns an error.
         """
-        return self._make_query(self._username_query(user_ids), **kwargs)
+        return self._make_query(
+            self._username_query(user_ids),
+            fields=fields,
+            **(query_params or {}),
+        )
 
-    def iter_video_pages(
+    def iter_video_pages(  # noqa: PLR0913
         self,
         video_ids: list[str],
+        query_filters: QueryOptions | None = None,
         *,
         max_pages: int | None = None,
         cursor: str | None = None,
         search_id: str | None = None,
-        **kwargs,
+        fields: Sequence[str] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield each page of video metadata, following the API cursor.
 
         Args:
             video_ids: List of TikTok video IDs to query.
+            query_filters: Filter parameters. See :class:`QueryOptions`.
             max_pages: Safety cap on pages fetched. ``None`` means no cap.
             cursor: Resume from a prior page's cursor.
             search_id: Resume from a prior page's search_id.
-            **kwargs: Forwarded to ``_build_query_body``
-                (start_date, end_date, max_count, is_random).
+            fields: Per-call override for response fields. ``None`` uses the
+                client default.
 
         Yields:
             Raw API response for each page (includes ``data.videos``,
@@ -330,46 +404,86 @@ class ResearchAPIClient:
             max_pages=max_pages,
             cursor=cursor,
             search_id=search_id,
-            **kwargs,
+            fields=fields,
+            **(query_filters or {}),
         )
 
-    def iter_user_video_pages(
+    def iter_user_video_pages(  # noqa: PLR0913
         self,
         user_ids: list[str],
+        query_filters: QueryOptions | None = None,
         *,
         max_pages: int | None = None,
         cursor: str | None = None,
         search_id: str | None = None,
-        **kwargs,
+        fields: Sequence[str] | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield each page of videos posted by given users, following the API cursor."""
+        """Yield each page of videos posted by given users, following the API cursor.
+
+        Args:
+            user_ids: List of TikTok usernames to query.
+            query_filters: Filter parameters. See :class:`QueryOptions`.
+            max_pages: Safety cap on pages fetched. ``None`` means no cap.
+            cursor: Resume from a prior page's cursor.
+            search_id: Resume from a prior page's search_id.
+            fields: Per-call override for response fields. ``None`` uses the
+                client default.
+        """
         yield from self._iter_pages(
             self._username_query(user_ids),
             max_pages=max_pages,
             cursor=cursor,
             search_id=search_id,
-            **kwargs,
+            fields=fields,
+            **(query_filters or {}),
         )
 
-    def iter_videos(
+    def iter_videos(  # noqa: PLR0913
         self,
         video_ids: list[str],
-        **kwargs,
+        query_filters: QueryOptions | None = None,
+        *,
+        max_pages: int | None = None,
+        cursor: str | None = None,
+        search_id: str | None = None,
+        fields: Sequence[str] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Yield each video dict across all pages.
 
-        Thin wrapper over ``iter_video_pages``.
+        Thin wrapper over :meth:`iter_video_pages`; see it for argument docs.
         """
-        for page in self.iter_video_pages(video_ids, **kwargs):
+        for page in self.iter_video_pages(
+            video_ids,
+            query_filters,
+            max_pages=max_pages,
+            cursor=cursor,
+            search_id=search_id,
+            fields=fields,
+        ):
             yield from page.get("data", {}).get("videos", [])
 
-    def iter_user_videos(
+    def iter_user_videos(  # noqa: PLR0913
         self,
         user_ids: list[str],
-        **kwargs,
+        query_filters: QueryOptions | None = None,
+        *,
+        max_pages: int | None = None,
+        cursor: str | None = None,
+        search_id: str | None = None,
+        fields: Sequence[str] | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield each video dict for the given users across all pages."""
-        for page in self.iter_user_video_pages(user_ids, **kwargs):
+        """Yield each video dict for the given users across all pages.
+
+        Thin wrapper over :meth:`iter_user_video_pages`; see it for argument docs.
+        """
+        for page in self.iter_user_video_pages(
+            user_ids,
+            query_filters,
+            max_pages=max_pages,
+            cursor=cursor,
+            search_id=search_id,
+            fields=fields,
+        ):
             yield from page.get("data", {}).get("videos", [])
 
     def _iter_pages(
@@ -379,7 +493,8 @@ class ResearchAPIClient:
         max_pages: int | None,
         cursor: str | None,
         search_id: str | None,
-        **kwargs,
+        fields: Sequence[str] | None = None,
+        **kwargs: Unpack[QueryOptions],
     ) -> Iterator[dict[str, Any]]:
         """Drive cursor-based pagination for a given query body."""
         pages_yielded = 0
@@ -388,6 +503,7 @@ class ResearchAPIClient:
                 query,
                 cursor=cursor,
                 search_id=search_id,
+                fields=fields,
                 **kwargs,
             )
             yield page
@@ -410,7 +526,13 @@ class ResearchAPIClient:
             cursor = next_cursor
             search_id = data.get("search_id", search_id)
 
-    def _make_query(self, query: dict[str, Any], **kwargs) -> dict[str, Any]:
+    def _make_query(
+        self,
+        query: dict[str, Any],
+        *,
+        fields: Sequence[str] | None = None,
+        **kwargs: Unpack[PageOptions],
+    ) -> dict[str, Any]:
         """Execute a query against the TikTok Research API.
 
         Builds the request URL, constructs the query body, and sends the request
@@ -418,7 +540,9 @@ class ResearchAPIClient:
 
         Args:
             query: The query structure containing filter conditions.
-            **kwargs: Additional query parameters passed to get_query_body().
+            fields: Per-call override for response fields. ``None`` uses the
+                client default.
+            **kwargs: Additional query parameters passed to ``_build_query_body``.
 
         Returns:
             The API response data.
@@ -427,7 +551,7 @@ class ResearchAPIClient:
             ResearchAPIRequestError: If the HTTP request fails (non-200 status)
                 or if the API returns an error response.
         """
-        url = self._build_url()
+        url = self._build_url(fields)
         query_body = self._build_query_body(query, **kwargs)
         response = self._post_with_retry(
             url,
@@ -504,6 +628,14 @@ class ResearchAPIClient:
             Dates are automatically converted to YYYYMMDD format as required by the API.
             The start_date cannot be more than 30 days before end_date per API limits.
         """
+
+        # Dev Note:
+        #     The keyword parameters of this method must stay in sync with
+        #     :class:`QueryOptions` / :class:`PageOptions`. Public methods splat
+        #     those TypedDicts into this signature, so any divergence becomes a
+        #     runtime ``TypeError`` (extra key) or a silently unreachable param
+        #     (missing key).
+
         if end_date is None:
             end_date = datetime.now(tz=UTC).date() - timedelta(days=3)
         else:
@@ -526,42 +658,17 @@ class ResearchAPIClient:
             "is_random": is_random,
         }
 
-    def _build_url(self, query_fields: list[str] | None = None) -> str:
-        """Build request URL.
-
-        Includes all available query fields by default (for an overview, see
-        https://developers.tiktok.com/doc/research-api-specs-query-videos#query_parameters)
+    def _build_url(self, fields: Sequence[str] | None = None) -> str:
+        """Build the video-query request URL.
 
         Args:
-            query_fields: Query fields to include in response.
+            fields: Per-call override for response fields. Falls back to the
+                client's default (set via ``video_fields=`` in
+                :meth:`__init__`, defaulting to
+                :data:`config.DEFAULT_VIDEO_FIELDS`).
 
         Returns:
             The request URL.
         """
-        if query_fields is None:
-            query_fields = [
-                "id",
-                "video_description",
-                "create_time",
-                "region_code",
-                "share_count",
-                "view_count",
-                "like_count",
-                "comment_count",
-                "music_id",
-                "hashtag_names",
-                "username",
-                "effect_ids",
-                "playlist_id",
-                "voice_to_text",
-                "is_stem_verified",
-                "video_duration",
-                "hashtag_info_list",
-                "sticker_info_list",
-                "effect_info_list",
-                "video_mention_list",
-                "video_label",
-                "video_tag",
-            ]
-
-        return self.VIDEO_QUERY_URL + "?fields=" + ",".join(query_fields)
+        included_fields = fields if fields is not None else self._video_fields
+        return self.VIDEO_QUERY_URL + "?fields=" + ",".join(included_fields)
