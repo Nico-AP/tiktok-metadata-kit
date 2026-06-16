@@ -1,10 +1,67 @@
 # TikTok Metadata Kit
 
+[![PyPI version](https://img.shields.io/pypi/v/tiktok-metadata-kit.svg)](https://pypi.org/project/tiktok-metadata-kit/)
+[![Python versions](https://img.shields.io/pypi/pyversions/tiktok-metadata-kit.svg)](https://pypi.org/project/tiktok-metadata-kit/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Nico-AP/tiktok-metadata-kit/blob/main/LICENSE)
+[![Tests](https://github.com/Nico-AP/tiktok-metadata-kit/actions/workflows/test.yml/badge.svg)](https://github.com/Nico-AP/tiktok-metadata-kit/actions/workflows/test.yml)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 A Python library for TikTok metadata collection, with support for web scraping and the TikTok Research API.
 
 ## Quickstart
 
-> TODO
+### Install
+
+The base install gives you the Research API client:
+
+```bash
+pip install tiktok-metadata-kit
+```
+
+To also use the web scraper (adds `beautifulsoup4` and `selenium`, the latter
+of which needs a browser driver), install the `scraper` extra:
+
+```bash
+pip install "tiktok-metadata-kit[scraper]"
+```
+
+### Use the Research API client
+
+Get your `client_key` and `client_secret` from the [TikTok Research API portal](https://developers.tiktok.com/products/research-api).
+
+```python
+from tiktok_metadata_kit.research_api import (
+    ResearchAPIClient,
+    PageOptions,
+    QueryOptions,
+)
+
+# Single page — useful for ad-hoc lookups.
+client = ResearchAPIClient(api_key="...", api_secret="...")
+page = client.query_videos(["7123456789", "7987654321"])
+for video in page["data"]["videos"]:
+    print(video["id"], video["view_count"])
+
+# Stream across all pages — cursor-based pagination handled for you.
+with ResearchAPIClient("...", "...") as client:
+    for video in client.iter_user_videos(["alice", "bob"]):
+        print(video["id"], video["username"])
+
+# Reuse filters across calls; cap iteration for safety.
+filters = QueryOptions(start_date=d0, end_date=d1, max_count=100)
+for page in client.iter_video_pages(ids, filters, max_pages=10):
+    process_page(page)
+```
+
+The client handles token retrieval and proactive refresh, retries transient
+failures (429, 5xx, network errors) with exponential backoff, and honors
+`Retry-After`. See the docstrings on
+[`ResearchAPIClient`](src/tiktok_metadata_kit/research_api/client.py) for the
+full API surface.
+
+### Use the scraper
+
+> TODO — see the `tiktok_metadata_kit.scraper` subpackage.
 
 
 ## Development
@@ -178,30 +235,50 @@ Three GitHub Actions workflows live in `.github/workflows/`:
 | Workflow                      | Trigger                              | What it does                                                         |
 |-------------------------------|--------------------------------------|----------------------------------------------------------------------|
 | `test.yml`                    | push to `main`/`dev`; all PRs        | Runs `ruff check` and `pytest` with coverage (80% gate).             |
-| `release-testpypi.yml`        | push of a tag matching `v*`          | Verifies the tag matches `pyproject.toml`, runs tests, builds sdist + wheel, publishes to **TestPyPI**. |
+| `release-testpypi.yml`        | push of a tag matching `v*`          | Runs tests, builds sdist + wheel (version derived from the tag via `hatch-vcs`), publishes to **TestPyPI**. |
 | `publish-pypi.yml`            | a GitHub Release is published        | Same checks and build, publishes to **production PyPI**.             |
 
 Both release workflows use **trusted publishing** (OIDC) — no PyPI API tokens
 are stored as GitHub Secrets.
+
+### Versioning
+
+The package version is derived from git tags by
+[`hatch-vcs`](https://github.com/ofek/hatch-vcs) — there is **no `version`
+field in `pyproject.toml`** to maintain. The `v*` tag *is* the version:
+
+| Git state                          | Built version            |
+|------------------------------------|--------------------------|
+| `HEAD` is exactly on tag `v1.2.0`  | `1.2.0`                  |
+| `v1.2.0rc1`                        | `1.2.0rc1` (prerelease)  |
+| 3 commits past `v1.2.0`            | `1.2.1.dev3+g<sha>`      |
+| 3 commits past + dirty tree        | `1.2.1.dev3+g<sha>.d...` |
+
+The `+g<sha>` suffix is a PEP 440 local version identifier — valid in
+metadata, ignored by PyPI publishing (you can't upload `+local` versions),
+and lets editable installs report a distinguishable dev version.
+
+`tiktok_metadata_kit.__version__` reads this resolved version via
+`importlib.metadata` at import time, so it always reflects the installed
+wheel/sdist.
 
 ### Cutting a release
 
 The two-step flow lets you smoke-test the wheel on TestPyPI before promoting
 it to production PyPI.
 
-1. **Bump the version in `pyproject.toml`.** Follow [PEP 440](https://peps.python.org/pep-0440/) for prereleases
-   (`1.2.0a1`, `1.2.0b1`, `1.2.0rc1`).
-2. **Merge `dev` → `main`** via PR.
-3. **Tag the release commit on `main`** and push the tag:
+1. **Merge `dev` → `main`** via PR.
+2. **Tag the release commit on `main`** and push the tag:
 
    ```bash
-   git tag v1.2.0rc1
+   git tag v1.2.0rc1   # or v1.2.0 for a final release
    git push --tags
    ```
 
-   This fires `release-testpypi.yml`, which uploads to TestPyPI.
+   This fires `release-testpypi.yml`, which uploads to TestPyPI. The tag
+   becomes the version — no `pyproject.toml` bump required.
 
-4. **Smoke-test the TestPyPI wheel:**
+3. **Smoke-test the TestPyPI wheel:**
 
    ```bash
    pip install -i https://test.pypi.org/simple/ \
@@ -213,7 +290,7 @@ it to production PyPI.
    (The `--extra-index-url` lets pip resolve regular dependencies from real
    PyPI; otherwise it only sees TestPyPI's smaller index.)
 
-5. **Create a GitHub Release** on the tag (GitHub UI → Releases → "Draft a new release"
+4. **Create a GitHub Release** on the tag (GitHub UI → Releases → "Draft a new release"
    → pick the tag → check "Set as a pre-release" for `aN`/`bN`/`rcN` versions).
    Publishing the Release fires `publish-pypi.yml`, which uploads to PyPI.
 

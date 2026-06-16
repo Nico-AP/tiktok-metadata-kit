@@ -1,12 +1,18 @@
 # ==== Packaging (hatchling) ====
 [build-system]
-requires = ["hatchling >= 1.26"]
+requires = ["hatchling >= 1.26", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+# Version is derived from the most recent `v*` git tag by hatch-vcs.
+# See https://github.com/ofek/hatch-vcs and the CI / Release section in
+# README.md.
+[tool.hatch.version]
+source = "vcs"
 
 # ==== Project details ====
 [project]
 name = "tiktok-metadata-kit"
-version = "0.0.1"
+dynamic = ["version"]
 authors = [
   { name="Nico Pfiffner", email="nico-ap@proton.me" },
 ]
@@ -14,15 +20,37 @@ description = "Python library for TikTok metadata collection, with support for w
 readme = "README.md"
 requires-python = ">=3.12"
 classifiers = [
-    "Programming Language :: Python :: 3",
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Sociology",
+    "Typing :: Typed",
 ]
+keywords = ["tiktok", "research-api", "metadata", "scraping", "social-media"]
 license = "MIT"
 license-files = ["LICEN[CS]E*"]
 
+dependencies = [
+    "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+scraper = [
+    "beautifulsoup4>=4.14",
+    "selenium>=4.44",
+]
+
 [project.urls]
 Homepage = "https://github.com/Nico-AP/tiktok-metadata-kit"
+Repository = "https://github.com/Nico-AP/tiktok-metadata-kit"
 Issues = "https://github.com/Nico-AP/tiktok-metadata-kit/issues"
+Changelog = "https://github.com/Nico-AP/tiktok-metadata-kit/releases"
 
 # ==== ruff ====
 [tool.ruff]
