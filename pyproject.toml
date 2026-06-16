@@ -55,7 +55,7 @@ Changelog = "https://github.com/Nico-AP/tiktok-metadata-kit/releases"
 # ==== ruff ====
 [tool.ruff]
 target-version = "py312"
-extend-exclude = []
+extend-exclude = ["scraper"]  # temporarily added; TODO: remove when scraper is integrated.
 
 [tool.ruff.lint]
 select = [
