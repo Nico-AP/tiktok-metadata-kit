@@ -319,13 +319,13 @@ service before the first release:
 
 For each, register:
 
-| Field              | Value                                                         |
-|--------------------|---------------------------------------------------------------|
-| Project name       | `tiktok-metadata-kit`                                         |
-| Owner              | `Nico-AP`                                                     |
-| Repository         | `tiktok-metadata-kit`                                         |
+| Field              | Value                                                                 |
+|--------------------|-----------------------------------------------------------------------|
+| Project name       | `tiktok-metadata-kit`                                                 |
+| Owner              | `Nico-AP`                                                             |
+| Repository         | `tiktok-metadata-kit`                                                 |
 | Workflow filename  | `release-testpypi.yml` (for TestPyPI) / `publish-pypi.yml` (for PyPI) |
-| Environment name   | `testpypi` / `pypi`                                           |
+| Environment name   | `testpypi` / `pypi`                                                   |
 
 Then create matching environments in the GitHub repo
 (Settings → Environments). Optionally add required reviewers on the `pypi`
