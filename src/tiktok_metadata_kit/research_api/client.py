@@ -343,6 +343,7 @@ class ResearchAPIClient:
         """
         return self._make_query(
             self._video_id_query(video_ids),
+            endpoint_url=self.VIDEO_QUERY_URL,
             fields=fields,
             **(query_params or {}),
         )
@@ -370,6 +371,7 @@ class ResearchAPIClient:
         """
         return self._make_query(
             self._username_query(user_ids),
+            endpoint_url=self.VIDEO_QUERY_URL,
             fields=fields,
             **(query_params or {}),
         )
@@ -404,6 +406,7 @@ class ResearchAPIClient:
             max_pages=max_pages,
             cursor=cursor,
             search_id=search_id,
+            endpoint_url=self.VIDEO_QUERY_URL,
             fields=fields,
             **(query_filters or {}),
         )
@@ -434,6 +437,7 @@ class ResearchAPIClient:
             max_pages=max_pages,
             cursor=cursor,
             search_id=search_id,
+            endpoint_url=self.VIDEO_QUERY_URL,
             fields=fields,
             **(query_filters or {}),
         )
@@ -486,13 +490,14 @@ class ResearchAPIClient:
         ):
             yield from page.get("data", {}).get("videos", [])
 
-    def _iter_pages(
+    def _iter_pages(  # noqa: PLR0913
         self,
         query: dict[str, Any],
         *,
         max_pages: int | None,
         cursor: str | None,
         search_id: str | None,
+        endpoint_url: str,
         fields: Sequence[str] | None = None,
         **kwargs: Unpack[QueryOptions],
     ) -> Iterator[dict[str, Any]]:
@@ -503,6 +508,7 @@ class ResearchAPIClient:
                 query,
                 cursor=cursor,
                 search_id=search_id,
+                endpoint_url=endpoint_url,
                 fields=fields,
                 **kwargs,
             )
@@ -530,6 +536,7 @@ class ResearchAPIClient:
         self,
         query: dict[str, Any],
         *,
+        endpoint_url: str,
         fields: Sequence[str] | None = None,
         **kwargs: Unpack[PageOptions],
     ) -> dict[str, Any]:
@@ -540,8 +547,9 @@ class ResearchAPIClient:
 
         Args:
             query: The query structure containing filter conditions.
+            endpoint_url: Target endpoint (e.g. :attr:`VIDEO_QUERY_URL`).
             fields: Per-call override for response fields. ``None`` uses the
-                client default.
+                client default (:attr:`_video_fields`).
             **kwargs: Additional query parameters passed to ``_build_query_body``.
 
         Returns:
@@ -551,7 +559,10 @@ class ResearchAPIClient:
             ResearchAPIRequestError: If the HTTP request fails (non-200 status)
                 or if the API returns an error response.
         """
-        url = self._build_url(fields)
+        url = self._build_url(
+            endpoint_url,
+            fields if fields is not None else self._video_fields,
+        )
         query_body = self._build_query_body(query, **kwargs)
         response = self._post_with_retry(
             url,
@@ -658,17 +669,16 @@ class ResearchAPIClient:
             "is_random": is_random,
         }
 
-    def _build_url(self, fields: Sequence[str] | None = None) -> str:
-        """Build the video-query request URL.
+    @staticmethod
+    def _build_url(endpoint_url: str, fields: Sequence[str]) -> str:
+        """Build a Research API request URL for the given endpoint.
 
         Args:
-            fields: Per-call override for response fields. Falls back to the
-                client's default (set via ``video_fields=`` in
-                :meth:`__init__`, defaulting to
-                :data:`config.DEFAULT_VIDEO_FIELDS`).
+            endpoint_url: Base URL of the target endpoint
+                (e.g. :attr:`VIDEO_QUERY_URL`, :attr:`USER_QUERY_URL`).
+            fields: Response fields to request.
 
         Returns:
-            The request URL.
+            The fully qualified request URL with ``?fields=`` appended.
         """
-        included_fields = fields if fields is not None else self._video_fields
-        return self.VIDEO_QUERY_URL + "?fields=" + ",".join(included_fields)
+        return endpoint_url + "?fields=" + ",".join(fields)
