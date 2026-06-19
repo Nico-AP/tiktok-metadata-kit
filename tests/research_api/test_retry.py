@@ -1,4 +1,11 @@
-"""Retry and backoff: status-based retries, Retry-After honoring, transport errors."""
+"""Retry and backoff: status-based retries, Retry-After honoring, transport errors.
+
+These tests use ``query_user_info`` for retry assertions because it's a
+single, non-paginated request that returns a dict — cleaner for "did we
+retry N times" assertions than the iterator-based ``query_videos*`` methods.
+The retry logic lives in ``_post_with_retry``, which is shared by all
+endpoints, so this is fully representative.
+"""
 
 import logging
 import time
@@ -14,8 +21,8 @@ from tiktok_metadata_kit.research_api import (
 from .conftest import MockHandler
 
 
-def _ok_page() -> dict:
-    return {"data": {"videos": [], "has_more": False}, "error": {"code": "ok"}}
+def _ok_response() -> dict:
+    return {"data": {"display_name": "Alice"}, "error": {"code": "ok"}}
 
 
 @pytest.fixture(autouse=True)
@@ -31,9 +38,9 @@ class TestRetryOnStatus:
         client: ResearchAPIClient,
     ) -> None:
         mock_handler.add_response("rate limited", status=429)
-        mock_handler.add_response(_ok_page())
+        mock_handler.add_response(_ok_response())
 
-        result = client.query_videos(["1"])
+        result = client.query_user_info("alice")
 
         assert result["error"]["code"] == "ok"
         # Token request + 429 + success.
@@ -47,9 +54,9 @@ class TestRetryOnStatus:
         status: int,
     ) -> None:
         mock_handler.add_response("server error", status=status)
-        mock_handler.add_response(_ok_page())
+        mock_handler.add_response(_ok_response())
 
-        client.query_videos(["1"])
+        client.query_user_info("alice")
 
         assert len(mock_handler.requests) == 3
 
@@ -60,7 +67,7 @@ class TestRetryOnStatus:
     ) -> None:
         mock_handler.add_response("bad", status=400)
         with pytest.raises(ResearchAPIRequestError):
-            client.query_videos(["1"])
+            client.query_user_info("alice")
 
         # Only token request + the single failing query (no retry).
         assert len(mock_handler.requests) == 2
@@ -76,7 +83,7 @@ class TestRetryOnStatus:
             mock_handler.add_response("server error", status=500)
 
         with pytest.raises(ResearchAPIRequestError):
-            client.query_videos(["1"])
+            client.query_user_info("alice")
 
         # Token + 3 failed attempts.
         assert len(mock_handler.requests) == 4
@@ -97,9 +104,9 @@ class TestRetryAfterHeader:
             status=429,
             headers={"Retry-After": "7"},
         )
-        mock_handler.add_response(_ok_page())
+        mock_handler.add_response(_ok_response())
 
-        client.query_videos(["1"])
+        client.query_user_info("alice")
 
         assert sleeps == [7.0]
 
@@ -119,10 +126,10 @@ class TestRetryAfterHeader:
             status=429,
             headers={"Retry-After": "9999"},
         )
-        mock_handler.add_response(_ok_page())
+        mock_handler.add_response(_ok_response())
 
         with caplog.at_level(logging.WARNING):
-            client.query_videos(["1"])
+            client.query_user_info("alice")
 
         assert sleeps == [client.MAX_RETRY_AFTER]
         assert any(
@@ -144,9 +151,9 @@ class TestRetryAfterHeader:
             status=429,
             headers={"Retry-After": "not-a-number"},
         )
-        mock_handler.add_response(_ok_page())
+        mock_handler.add_response(_ok_response())
 
-        client.query_videos(["1"])
+        client.query_user_info("alice")
 
         # Exponential backoff for attempt 0: base * 2^0 + jitter ∈ [1, 2].
         assert len(sleeps) == 1
@@ -160,9 +167,9 @@ class TestTransportErrors:
         client: ResearchAPIClient,
     ) -> None:
         mock_handler.add_exception(httpx.ConnectError("boom"))
-        mock_handler.add_response(_ok_page())
+        mock_handler.add_response(_ok_response())
 
-        client.query_videos(["1"])
+        client.query_user_info("alice")
 
         assert len(mock_handler.requests) == 3
 
@@ -176,4 +183,4 @@ class TestTransportErrors:
         mock_handler.add_exception(httpx.ConnectError("second"))
 
         with pytest.raises(httpx.ConnectError, match="second"):
-            client.query_videos(["1"])
+            client.query_user_info("alice")

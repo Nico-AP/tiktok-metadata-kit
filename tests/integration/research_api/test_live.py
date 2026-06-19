@@ -4,10 +4,12 @@ Run with ``pytest -m integration``. Skipped without credentials in the env;
 see ``conftest.py``.
 """
 
+from datetime import UTC, datetime
+
 import pytest
 
 from tiktok_metadata_kit.research_api import (
-    PageOptions,
+    QueryVideosOptions,
     ResearchAPIClient,
 )
 
@@ -20,20 +22,45 @@ def test_token_can_be_obtained(live_client: ResearchAPIClient) -> None:
     assert live_client.token_expires_at is not None
 
 
-def test_query_videos_returns_well_formed_response(
+def test_query_videos_by_username_returns_well_formed_videos(
     live_client: ResearchAPIClient,
 ) -> None:
-    """A minimal query returns the expected top-level shape.
+    """A minimal query yields dicts with the expected shape.
 
-    Uses ``max_count=1`` to minimize quota impact.
+    Uses ``max_count=1`` and ``max_pages=1`` to minimize quota impact.
     """
-    response = live_client.query_videos(
-        # Public-test video id; replace with one you know exists.
-        ["6584979523391982853"],
-        PageOptions(max_count=1),
+    videos = list(
+        live_client.query_videos_by_username(
+            # Public-test video id; replace with one you know exists.
+            ["tiktok"],
+            options=QueryVideosOptions(max_count=1, max_pages=1),
+        )
     )
-    assert "data" in response
-    assert "error" in response
     # The query may legitimately return zero videos — we only assert shape,
     # not contents.
-    assert isinstance(response["data"].get("videos", []), list)
+    assert isinstance(videos, list)
+    for video in videos:
+        assert isinstance(video, dict)
+
+
+def test_query_videos_by_id_returns_well_formed_videos(
+    live_client: ResearchAPIClient,
+) -> None:
+    """A minimal query yields dicts with the expected shape.
+
+    Uses ``max_count=1`` and ``max_pages=1`` to minimize quota impact.
+    """
+    videos = list(
+        live_client.query_videos_by_id(
+            # Public-test video id; replace with one you know exists.
+            ["6584979523391982853"],
+            start_date=datetime(2018, 2, 5, tzinfo=UTC).date(),
+            end_date=datetime(2018, 2, 10, tzinfo=UTC).date(),
+            options=QueryVideosOptions(max_count=1, max_pages=1),
+        )
+    )
+    # The query may legitimately return zero videos — we only assert shape,
+    # not contents.
+    assert isinstance(videos, list)
+    for video in videos:
+        assert isinstance(video, dict)
