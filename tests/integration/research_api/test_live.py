@@ -64,3 +64,24 @@ def test_query_videos_by_id_returns_well_formed_videos(
     assert isinstance(videos, list)
     for video in videos:
         assert isinstance(video, dict)
+
+
+def test_query_videos_by_hashtag_returns_well_formed_videos(
+    live_client: ResearchAPIClient,
+) -> None:
+    """A minimal query yields dicts with the expected shape.
+
+    Uses ``max_count=1`` and ``max_pages=1`` to minimize quota impact.
+    """
+    videos = list(
+        live_client.query_videos_by_hashtag(
+            # Public-test video id; replace with one you know exists.
+            ["apple"],
+            options=QueryVideosOptions(max_count=1, max_pages=1),
+        )
+    )
+    # The query may legitimately return zero videos — we only assert shape,
+    # not contents.
+    assert isinstance(videos, list)
+    for video in videos:
+        assert isinstance(video, dict)
