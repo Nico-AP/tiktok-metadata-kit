@@ -9,6 +9,9 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 source = "vcs"
 
+[tool.hatch.build.targets.wheel]
+exclude = ["src/tiktok_metadata_kit/scraper/**"]
+
 # ==== Project details ====
 [project]
 name = "tiktok-metadata-kit"
@@ -40,11 +43,12 @@ dependencies = [
     "httpx>=0.28",
 ]
 
-[project.optional-dependencies]
-scraper = [
-    "beautifulsoup4>=4.14",
-    "selenium>=4.44",
-]
+# Removed until scraper is shipped:
+# [project.optional-dependencies]
+# scraper = [
+#     "beautifulsoup4>=4.14",
+#     "selenium>=4.44",
+# ]
 
 [project.urls]
 Homepage = "https://github.com/Nico-AP/tiktok-metadata-kit"

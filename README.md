@@ -18,13 +18,6 @@ The base install gives you the Research API client:
 pip install tiktok-metadata-kit
 ```
 
-To also use the web scraper (adds `beautifulsoup4` and `selenium`, the latter
-of which needs a browser driver), install the `scraper` extra:
-
-```bash
-pip install "tiktok-metadata-kit[scraper]"
-```
-
 ### Use the Research API client
 
 Get your `client_key` and `client_secret` from the [TikTok Research API portal](https://developers.tiktok.com/products/research-api).
@@ -32,36 +25,47 @@ Get your `client_key` and `client_secret` from the [TikTok Research API portal](
 ```python
 from tiktok_metadata_kit.research_api import (
     ResearchAPIClient,
-    PageOptions,
-    QueryOptions,
+    QueryVideosOptions,
 )
 
-# Single page — useful for ad-hoc lookups.
-client = ResearchAPIClient(api_key="...", api_secret="...")
-page = client.query_videos(["7123456789", "7987654321"])
-for video in page["data"]["videos"]:
-    print(video["id"], video["view_count"])
-
-# Stream across all pages — cursor-based pagination handled for you.
-with ResearchAPIClient("...", "...") as client:
-    for video in client.iter_user_videos(["alice", "bob"]):
+# Stream videos for a set of users — cursor-based pagination handled for you.
+with ResearchAPIClient("client_key", "client_secret") as client:
+    for video in client.query_videos_by_username(["alice", "bob"]):
         print(video["id"], video["username"])
 
-# Reuse filters across calls; cap iteration for safety.
-filters = QueryOptions(start_date=d0, end_date=d1, max_count=100)
-for page in client.iter_video_pages(ids, filters, max_pages=10):
-    process_page(page)
+# Stream videos by ID with a smaller field set and a safety cap on pages.
+opts = QueryVideosOptions(
+    fields=["id", "view_count"],
+    max_count=50,
+    max_pages=10,
+)
+for video in client.query_videos_by_id(["7123456789", "7987654321"], options=opts):
+    print(video["id"], video["view_count"])
+
+# Page-level iteration.
+for page in client.query_videos_pages({"and": [...]}):
+
+    cursor=page["data"].get("cursor"),
+    search_id=page["data"].get("search_id"),
+
+    for video in page["data"]["videos"]:
+        print(video["id"])
+
+# Single-shot user metadata lookup (no pagination).
+info = client.query_user_info("alice")
+print(info["data"]["follower_count"])
 ```
 
 The client handles token retrieval and proactive refresh, retries transient
 failures (429, 5xx, network errors) with exponential backoff, and honors
 `Retry-After`. See the docstrings on
 [`ResearchAPIClient`](src/tiktok_metadata_kit/research_api/client.py) for the
-full API surface.
+full API surface, including raw queries and resume-from-checkpoint via
+`QueryVideosOptions(cursor=..., search_id=...)`.
 
 ### Use the scraper
 
-> TODO — see the `tiktok_metadata_kit.scraper` subpackage.
+> This is currently work in progress and not yet included in the package.
 
 
 ## Development
@@ -308,25 +312,3 @@ pip install tiktok-metadata-kit --pre
 
 Tag naming follows PEP 440: `v1.2.0a1` (alpha), `v1.2.0b1` (beta),
 `v1.2.0rc1` (release candidate).
-
-### First-time PyPI setup (one-off)
-
-Trusted publishing requires a "pending publisher" to be registered on each
-service before the first release:
-
-- **TestPyPI:** https://test.pypi.org/manage/account/publishing/
-- **PyPI:** https://pypi.org/manage/account/publishing/
-
-For each, register:
-
-| Field              | Value                                                         |
-|--------------------|---------------------------------------------------------------|
-| Project name       | `tiktok-metadata-kit`                                         |
-| Owner              | `Nico-AP`                                                     |
-| Repository         | `tiktok-metadata-kit`                                         |
-| Workflow filename  | `release-testpypi.yml` (for TestPyPI) / `publish-pypi.yml` (for PyPI) |
-| Environment name   | `testpypi` / `pypi`                                           |
-
-Then create matching environments in the GitHub repo
-(Settings → Environments). Optionally add required reviewers on the `pypi`
-environment to gate production publishes behind manual approval.

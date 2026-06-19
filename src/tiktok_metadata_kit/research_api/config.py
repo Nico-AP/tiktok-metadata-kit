@@ -1,7 +1,7 @@
 # TikTok endpoints
 ACCESS_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/"  # noqa: S105
-VIDEO_QUERY_URL = "https://open.tiktokapis.com/v2/research/video/query/"
-USER_QUERY_URL = "https://open.tiktokapis.com/v2/research/user/info/"
+QUERY_VIDEOS_URL = "https://open.tiktokapis.com/v2/research/video/query/"
+QUERY_USER_INFO_URL = "https://open.tiktokapis.com/v2/research/user/info/"
 
 # Client configuration
 DEFAULT_REFRESH_TOKEN_EXP_TIME = 7200  # seconds = 2 hours
@@ -18,7 +18,7 @@ RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
 # Default set of fields requested from the video-query endpoint.
 # See https://developers.tiktok.com/doc/research-api-specs-query-videos#query_parameters
-DEFAULT_VIDEO_FIELDS: tuple[str, ...] = (
+QUERY_VIDEOS_FIELDS: tuple[str, ...] = (
     "id",
     "video_description",
     "create_time",
@@ -41,4 +41,17 @@ DEFAULT_VIDEO_FIELDS: tuple[str, ...] = (
     "video_mention_list",
     "video_label",
     "video_tag",
+    "favorites_count",
+)
+
+QUERY_USER_INFO_FIELDS: tuple[str, ...] = (
+    "display_name",
+    "bio_description",
+    "avatar_url",
+    "is_verified",
+    "follower_count",
+    "following_count",
+    "likes_count",
+    "video_count",
+    "bio_url",
 )
