@@ -440,6 +440,30 @@ class ResearchAPIClient:
             self._username_query(usernames), start_date, end_date, options
         )
 
+    def query_videos_by_hashtag(
+        self,
+        hashtags: list[str],
+        start_date: date | None = None,
+        end_date: date | None = None,
+        options: QueryVideosOptions | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield videos associated with one of the given hashtags.
+
+        Convenience wrapper around ``query_videos`` — see it for full argument docs.
+
+        Args:
+            hashtags: Names of hashtags for which to retrieve TikTok videos.
+            start_date: See ``query_videos``.
+            end_date: See ``query_videos``.
+            options: See ``QueryVideosOptions``.
+
+        Raises:
+            ResearchAPIRequestError: If the API request fails or returns an error.
+        """
+        yield from self.query_videos(
+            self._hashtag_query(hashtags), start_date, end_date, options
+        )
+
     def query_user_info(self, username: str) -> dict[str, Any]:
         """Yield user infor for the given username.
 
@@ -592,5 +616,17 @@ class ResearchAPIClient:
         return {
             "and": [
                 {"operation": "IN", "field_name": "username", "field_values": user_ids},
+            ],
+        }
+
+    @staticmethod
+    def _hashtag_query(hashtag_names: list[str]) -> dict[str, Any]:
+        return {
+            "and": [
+                {
+                    "operation": "IN",
+                    "field_name": "hashtag_name",
+                    "field_values": hashtag_names,
+                },
             ],
         }
