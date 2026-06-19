@@ -94,6 +94,27 @@ class TestQueryVideosByUsername:
         assert url.startswith(ResearchAPIClient.QUERY_VIDEOS_URL)
 
 
+class TestQueryVideosByHashtag:
+    def test_builds_in_filter_on_hashtag(
+        self,
+        mock_handler: MockHandler,
+        client: ResearchAPIClient,
+    ) -> None:
+        mock_handler.add_response(_page())
+        list(client.query_videos_by_hashtag(["apple", "pear"]))
+
+        body = json.loads(mock_handler.requests[1].content)
+        assert body["query"] == {
+            "and": [
+                {
+                    "operation": "IN",
+                    "field_name": "hashtag_name",
+                    "field_values": ["apple", "pear"],
+                },
+            ],
+        }
+
+
 class TestQueryVideosRawQuery:
     def test_accepts_raw_query_dict(
         self,
