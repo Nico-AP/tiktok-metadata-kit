@@ -11,7 +11,14 @@ from typing import Any, Self
 import httpx
 
 from . import config
-from .exceptions import ResearchAPIAccessTokenRetrievalError, ResearchAPIRequestError
+from .exceptions import (
+    ResearchAPIAccessTokenInvalidError,
+    ResearchAPIAccessTokenRetrievalError,
+    ResearchAPIError,
+    ResearchAPIInternalServerError,
+    ResearchAPIInvalidParamsError,
+    ResearchAPIRateLimitExceededError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +28,7 @@ class QueryVideosOptions:
     """Optional parameters for the query_videos endpoint.
 
     Args:
-        max_count: Videos per page, 1-100. Defaults to 20. Actual results may
+        max_count: Videos per page, 1-100. Defaults to 100. Actual results may
             be fewer if videos were deleted or set to private.
         cursor: Resume pagination from this index. Use together with
             ``search_id`` when resuming a previous search.
@@ -37,7 +44,7 @@ class QueryVideosOptions:
         a previous search.
     """
 
-    max_count: int | None = None
+    max_count: int | None = 100
     cursor: int | None = None
     search_id: str | None = None
     is_random: bool = False
@@ -60,6 +67,39 @@ def _parse_retry_after(value: str) -> float | None:
     return (target - datetime.now(tz=UTC)).total_seconds()
 
 
+# Mapping TikTok's error code strings to specific exception classes.
+# see: https://developers.tiktok.com/doc/tiktok-api-v2-error-handling
+_TIKTOK_ERROR_CODE_MAP: dict[str, type[ResearchAPIError]] = {
+    "access_token_invalid": ResearchAPIAccessTokenInvalidError,
+    "internal_error": ResearchAPIInternalServerError,
+    "invalid_params": ResearchAPIInvalidParamsError,
+    "rate_limit_exceeded": ResearchAPIRateLimitExceededError,
+}
+
+
+# Fallback mapping for when the response body isn't parseable JSON
+# and all we have is the HTTP status code.
+_HTTP_STATUS_MAP: dict[int, type[ResearchAPIError]] = {
+    400: ResearchAPIInvalidParamsError,
+    401: ResearchAPIAccessTokenInvalidError,
+    429: ResearchAPIRateLimitExceededError,
+    500: ResearchAPIInternalServerError,
+}
+
+
+def _parse_tiktok_error(error: dict[str, Any]) -> tuple[str, str, str]:
+    """Extract ``(code, message, log_id)`` from a TikTok error object.
+
+    Falls back to placeholder strings when fields are missing, empty, or
+    null. Accepts both the documented ``message`` key and the legacy ``msg``
+    spelling — TikTok responses have been seen with either.
+    """
+    code = error.get("code") or "unknown"
+    message = error.get("message") or error.get("msg") or "no message provided"
+    log_id = error.get("log_id") or "unavailable"
+    return code, message, log_id
+
+
 class ResearchAPIClient:
     """Client for interacting with TikTok's Research API.
 
@@ -80,9 +120,9 @@ class ResearchAPIClient:
     * :meth:`query_videos_pages` — generator yielding raw API pages for the
       same query (with ``data.has_more``, ``data.cursor``, ``data.search_id``
       etc.). Use when you need page metadata for checkpointing.
-    * :meth:`query_videos_by_id` / :meth:`query_videos_by_username` —
-      convenience wrappers that build the corresponding ``IN`` filter and
-      delegate to :meth:`query_videos`.
+    * :meth:`query_videos_by_id` / :meth:`query_videos_by_username` /
+      :meth:`query_videos_by_hashtag` — convenience wrappers that build the
+      corresponding ``IN`` filter and delegate to :meth:`query_videos`.
     * :meth:`query_user_info` — single, non-paginated call to the user-info
       endpoint; returns the raw API response dict.
 
@@ -137,7 +177,7 @@ class ResearchAPIClient:
 
     Raises:
         ResearchAPIAccessTokenRetrievalError: If token retrieval fails.
-        ResearchAPIRequestError: If a query request fails or the API
+        ResearchAPIError: If a query request fails or the API
             returns an error response.
     """
 
@@ -335,7 +375,7 @@ class ResearchAPIClient:
                 ``QueryVideosOptions```
 
         Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
+            ResearchAPIError: If the API request fails or returns an error.
 
         Note:
             ``end_date`` must be within 30 days of ``start_date`` or the API
@@ -365,7 +405,7 @@ class ResearchAPIClient:
                 ``QueryVideosOptions```
 
         Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
+            ResearchAPIError: If the API request fails or returns an error.
 
         Note:
             ``end_date`` must be within 30 days of ``start_date`` or the API
@@ -410,7 +450,7 @@ class ResearchAPIClient:
             options: See ``QueryVideosOptions``.
 
         Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
+            ResearchAPIError: If the API request fails or returns an error.
         """
         yield from self.query_videos(
             self._video_id_query(video_ids), start_date, end_date, options
@@ -434,7 +474,7 @@ class ResearchAPIClient:
             options: See ``QueryVideosOptions``.
 
         Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
+            ResearchAPIError: If the API request fails or returns an error.
         """
         yield from self.query_videos(
             self._username_query(usernames), start_date, end_date, options
@@ -458,7 +498,7 @@ class ResearchAPIClient:
             options: See ``QueryVideosOptions``.
 
         Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
+            ResearchAPIError: If the API request fails or returns an error.
         """
         yield from self.query_videos(
             self._hashtag_query(hashtags), start_date, end_date, options
@@ -471,7 +511,7 @@ class ResearchAPIClient:
             username: Name of the user for which to query infos.
 
         Raises:
-            ResearchAPIRequestError: If the API request fails or returns an error.
+            ResearchAPIError: If the API request fails or returns an error.
         """
         query_body = {"username": username}
         return self._make_query(
@@ -537,7 +577,7 @@ class ResearchAPIClient:
             The API response data.
 
         Raises:
-            ResearchAPIRequestError: If the HTTP request fails (non-200 status)
+            ResearchAPIError: If the HTTP request fails (non-200 status)
                 or if the API returns an error response.
         """
         url = self._build_url(endpoint_url, fields)
@@ -549,29 +589,53 @@ class ResearchAPIClient:
         )
 
         if response.status_code != httpx.codes.OK:
-            msg = (
-                f"Invalid response from Research API. "
-                f"Response status code: {response.status_code} for "
-                f"url '{url}' and query body '{json.dumps(query_body)}'"
+            exc_class: type[ResearchAPIError] = _HTTP_STATUS_MAP.get(
+                response.status_code,
+                ResearchAPIError,
             )
-            raise ResearchAPIRequestError(msg)
+            try:
+                error_body = response.json()
+            except json.JSONDecodeError:
+                msg = (
+                    f"Research API returned HTTP {response.status_code} "
+                    f"with non-JSON body "
+                    f"(content-type: {response.headers.get('Content-Type')!r}, "
+                    f"body[:200]: {response.text[:200]!r}, "
+                    f"url: '{url}', query body: '{json.dumps(query_body)}')"
+                )
+            else:
+                code, message, log_id = _parse_tiktok_error(
+                    error_body.get("error", {}) if isinstance(error_body, dict) else {},
+                )
+                exc_class = _TIKTOK_ERROR_CODE_MAP.get(code, exc_class)
+                msg = (
+                    f"Research API error '{code}': {message} "
+                    f"(HTTP {response.status_code}, log_id: {log_id}, "
+                    f"url: '{url}', query body: '{json.dumps(query_body)}')"
+                )
+            raise exc_class(msg)
 
         try:
             data = response.json()
         except json.JSONDecodeError as exc:
             msg = (
-                "Malformed JSON in Research API response "
+                "Malformed JSON in Research API HTTP 200 response "
                 f"(content-type: {response.headers.get('Content-Type')!r}, "
                 f"body[:200]: {response.text[:200]!r})"
             )
-            raise ResearchAPIRequestError(msg) from exc
+            raise ResearchAPIError(msg) from exc
 
-        if "error" in data and data["error"].get("code") != "ok":
+        # A 200 response can still carry an application-level error.
+        error = data.get("error", {})
+        if error.get("code", "ok") != "ok":
+            code, message, log_id = _parse_tiktok_error(error)
+            exc_class = _TIKTOK_ERROR_CODE_MAP.get(code, ResearchAPIError)
             msg = (
-                f"Error in Research API response: "
-                f"{data['error'].get('msg')} ({data['error'].get('code')})"
+                f"Research API error '{code}': {message} "
+                f"(HTTP 200, log_id: {log_id}, url: '{url}', "
+                f"query body: '{json.dumps(query_body)}')"
             )
-            raise ResearchAPIRequestError(msg)
+            raise exc_class(msg)
 
         return data
 

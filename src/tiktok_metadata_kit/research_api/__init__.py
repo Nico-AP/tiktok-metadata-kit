@@ -6,19 +6,34 @@ Public surface:
   refresh, retries, and cursor-based pagination.
 * :class:`QueryVideosOptions` — dataclass for filter and pagination
   parameters passed to ``query_videos*`` methods.
-* :class:`ResearchAPIAccessTokenRetrievalError`,
-  :class:`ResearchAPIRequestError` — exceptions raised by the client.
+* :class:`ResearchAPIError` — base exception for all API errors. Subclasses
+  (:class:`ResearchAPIAccessTokenInvalidError`,
+  :class:`ResearchAPIInternalServerError`,
+  :class:`ResearchAPIInvalidParamsError`,
+  :class:`ResearchAPIRateLimitExceededError`) let callers ``except`` on the
+  specific failure mode.
+* :class:`ResearchAPIAccessTokenRetrievalError` — raised when the OAuth
+  token-retrieval call itself fails (distinct from a query failing because
+  the token is invalid mid-session).
 """
 
 from .client import QueryVideosOptions, ResearchAPIClient
 from .exceptions import (
+    ResearchAPIAccessTokenInvalidError,
     ResearchAPIAccessTokenRetrievalError,
-    ResearchAPIRequestError,
+    ResearchAPIError,
+    ResearchAPIInternalServerError,
+    ResearchAPIInvalidParamsError,
+    ResearchAPIRateLimitExceededError,
 )
 
 __all__ = [
     "QueryVideosOptions",
+    "ResearchAPIAccessTokenInvalidError",
     "ResearchAPIAccessTokenRetrievalError",
     "ResearchAPIClient",
-    "ResearchAPIRequestError",
+    "ResearchAPIError",
+    "ResearchAPIInternalServerError",
+    "ResearchAPIInvalidParamsError",
+    "ResearchAPIRateLimitExceededError",
 ]
