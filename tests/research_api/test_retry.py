@@ -15,7 +15,7 @@ import pytest
 
 from tiktok_metadata_kit.research_api import (
     ResearchAPIClient,
-    ResearchAPIRequestError,
+    ResearchAPIError,
 )
 
 from .conftest import MockHandler
@@ -66,7 +66,7 @@ class TestRetryOnStatus:
         client: ResearchAPIClient,
     ) -> None:
         mock_handler.add_response("bad", status=400)
-        with pytest.raises(ResearchAPIRequestError):
+        with pytest.raises(ResearchAPIError):
             client.query_user_info("alice")
 
         # Only token request + the single failing query (no retry).
@@ -82,7 +82,7 @@ class TestRetryOnStatus:
         for _ in range(3):  # MAX_RETRIES + 1 attempts
             mock_handler.add_response("server error", status=500)
 
-        with pytest.raises(ResearchAPIRequestError):
+        with pytest.raises(ResearchAPIError):
             client.query_user_info("alice")
 
         # Token + 3 failed attempts.

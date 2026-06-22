@@ -8,7 +8,7 @@ import pytest
 from tiktok_metadata_kit.research_api import (
     QueryVideosOptions,
     ResearchAPIClient,
-    ResearchAPIRequestError,
+    ResearchAPIError,
 )
 
 from .conftest import MockHandler
@@ -253,7 +253,7 @@ class TestQueryErrors:
     ) -> None:
         client.MAX_RETRIES = 0
         mock_handler.add_response("bad", status=400)
-        with pytest.raises(ResearchAPIRequestError, match="400"):
+        with pytest.raises(ResearchAPIError, match="400"):
             list(client.query_videos_by_id([1]))
 
     def test_api_error_in_payload_raises(
@@ -264,7 +264,7 @@ class TestQueryErrors:
         mock_handler.add_response(
             {"data": {}, "error": {"code": "bad_request", "msg": "nope"}},
         )
-        with pytest.raises(ResearchAPIRequestError, match="bad_request"):
+        with pytest.raises(ResearchAPIError, match="bad_request"):
             list(client.query_videos_by_id([1]))
 
     def test_malformed_json_raises_chained(
@@ -276,7 +276,7 @@ class TestQueryErrors:
             "not json",
             headers={"Content-Type": "text/plain"},
         )
-        with pytest.raises(ResearchAPIRequestError) as exc_info:
+        with pytest.raises(ResearchAPIError) as exc_info:
             list(client.query_videos_by_id([1]))
         assert exc_info.value.__cause__ is not None
 
